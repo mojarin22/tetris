@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <meta name="theme-color" content="#111" />
+  <title>Falling Blocks (Tetris-like)</title>
+  <style>
+    :root { --bg:#0f1115; --fg:#e9eef5; --muted:#a7b0bf; --card:#151a22; --btn:#1e2633; --btn2:#273145; }
+    html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: -apple-system, system-ui, Segoe UI, Roboto, "Noto Sans JP", sans-serif; }
+    * { -webkit-tap-highlight-color: transparent; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+    .top {
+      display:flex; gap:12px; align-items:center; justify-content:space-between;
+      background:var(--card); border-radius:14px; padding:12px 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    }
+    .title { font-weight:700; letter-spacing:.3px; }
+    .stats { display:flex; gap:14px; align-items:baseline; flex-wrap:wrap; color:var(--muted); font-size:14px; }
+    .stats b { color:var(--fg); font-size:16px; }
+    .grid {
+      margin-top: 12px;
+      display:grid;
+      grid-template-columns: 1fr 260px;
+      gap: 12px;
+      align-items:start;
+    }
+    @media (max-width: 760px){
+      .grid { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background:var(--card); border-radius:14px; padding:12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    }
+    canvas { width:100%; height:auto; display:block; border-radius:12px; background:#0b0e13; touch-action:none; }
+    .side { display:flex; flex-direction:column; gap:12px; }
+    .miniRow { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .mini canvas { background:#0b0e13; }
+    .help { color:var(--muted); font-size:13px; line-height:1.45; }
+    .btnRow { display:flex; gap:10px; flex-wrap:wrap; }
+    button {
+      appearance:none; border:0; border-radius:12px; padding:12px 14px;
+      background:var(--btn); color:var(--fg); font-weight:700; font-size:14px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+    }
+    button:active { transform: translateY(1px); background:var(--btn2); }
+    .touchPad {
+      display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px;
+      margin-top: 10px;
+    }
+    .touchPad button { padding:14px 12px; font-size:16px; }
+    .wide { grid-column: span 3; }
+    .footer { margin-top: 10px; color:var(--muted); font-size:12px; }
+    .pill { display:inline-block; padding:4px 8px; border-radius:999px; background:#0b0e13; color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="title">Falling Blocks <span class="pill">iPhone対応</span></div>
+        <div class="stats">
+          <span>Score <b id="score">0</b></span>
+          <span>Lines <b id="lines">0</b></span>
+          <span>Level <b id="level">1</b></span>
+          <span>Status <b id="status">Ready</b></span>
+        </div>
+      </div>
+      <div class="btnRow">
+        <button id="btnStart">Start</button>
+        <button id="btnPause">Pause</button>
+        <button id="btnReset">Reset</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <canvas id="game" width="360" height="720" aria-label="game"></canvas>
+        <div class="touchPad">
+          <button id="left">◀︎</button>
+          <button id="rotate">⟳</button>
+          <button id="right">▶︎</button>
+          <button class="wide" id="down">▼ Soft Drop</button>
+          <button class="wide" id="hard">⬇︎ Hard Drop</button>
+        </div>
+        <div class="footer">
+          キーボードでも操作可（PC）：← → / ↑(回転) / ↓(落下) / Space(ハードドロップ) / P(一時停止)
+        </div>
+      </div>
+
+      <div class="side">
+        <div class="panel mini">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="font-weight:700;">Next</div>
+            <div class="pill" id="modePill">Touch</div>
+          </div>
+          <canvas id="next" width="240" height="240"></canvas>
+        </div>
+
+        <div class="panel">
+          <div style="font-weight:700;margin-bottom:8px;">How to</div>
+          <div class="help">
+            ・ブロックを消してスコアを稼ぎます。<br/>
+            ・レベルが上がると落下速度が上がります。<br/>
+            ・iPhoneは下のボタンで操作。画面スワイプでもOK（左右/下）。<br/>
+            ・回転は「⟳」ボタン、ハードドロップは「Hard Drop」。<br/>
+          </div>
+          <div style="margin-top:10px;color:var(--muted);font-size:12px;">
+            ※これは「テトリス風の落ちものパズル」です（公式製品ではありません）。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ====== Config ======
+  const COLS = 10;
+  const ROWS = 20;
+  const BLOCK = 36; // virtual pixels per cell (canvas scale)
+  const BORDER = 12;
+  const bgColor = "#0b0e13";
+  const gridColor = "rgba(255,255,255,0.06)";
+
+  const COLORS = {
+    I: "#3dd6ff",
+    O: "#ffd84d",
+    T: "#c779ff",
+    S: "#53f58b",
+    Z: "#ff5b7a",
+    J: "#58a6ff",
+    L: "#ff9f45",
+    G: "rgba(255,255,255,0.15)"
+  };
+
+  const SHAPES = {
+    I: [
+      [0,0,0,0],
+      [1,1,1,1],
+      [0,0,0,0],
+      [0,0,0,0],
+    ],
+    O: [
+      [1,1],
+      [1,1],
+    ],
+    T: [
+      [0,1,0],
+      [1,1,1],
+      [0,0,0],
+    ],
+    S: [
+      [0,1,1],
+      [1,1,0],
+      [0,0,0],
+    ],
+    Z: [
+      [1,1,0],
+      [0,1,1],
+      [0,0,0],
+    ],
+    J: [
+      [1,0,0],
+      [1,1,1],
+      [0,0,0],
+    ],
+    L: [
+      [0,0,1],
+      [1,1,1],
+      [0,0,0],
+    ],
+  };
+
+  // ====== Canvas ======
+  const game = document.getElementById("game");
+  const ctx = game.getContext("2d");
+  const nextC = document.getElementById("next");
+  const nctx = nextC.getContext("2d");
+
+  // Resize canvas for crispness on high DPI
+  function setupCanvas(canvas, context, cssWidthPx){
+    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+    const rect = canvas.getBoundingClientRect();
+    const w = cssWidthPx ?? rect.width;
+    const h = rect.height;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    context.setTransform(dpr,0,0,dpr,0,0);
+  }
+
+  // set virtual game size
+  // game canvas is fixed aspect via its width/height attributes, but CSS scales it.
+  // We'll render in "logical" pixels based on canvas attribute ratios.
+  const V_W = BORDER*2 + COLS*BLOCK;
+  const V_H = BORDER*2 + ROWS*BLOCK;
+
+  // Force internal logical resolution mapping to the element size
+  function fitGameCanvas(){
+    // Keep aspect ratio V_W:V_H
+    // canvas element width 100% of panel; height auto based on attribute.
+    // We'll set its style height by ratio.
+    const panel = game.parentElement;
+    const availW = panel.clientWidth - 0;
+    const ratio = V_H / V_W;
+    const cssW = availW;
+    const cssH = Math.round(cssW * ratio);
+    game.style.height = cssH + "px";
+    setupCanvas(game, ctx, cssW);
+  }
+  function fitNextCanvas(){
+    // square preview
+    const panel = nextC.parentElement;
+    const availW = panel.clientWidth - 0;
+    nextC.style.height = availW + "px";
+    setupCanvas(nextC, nctx, availW);
+  }
+
+  window.addEventListener("resize", () => { fitGameCanvas(); fitNextCanvas(); draw(); drawNext(); });
+  fitGameCanvas(); fitNextCanvas();
+
+  // ====== Game State ======
+  const scoreEl = document.getElementById("score");
+  const linesEl = document.getElementById("lines");
+  const levelEl = document.getElementById("level");
+  const statusEl = document.getElementById("status");
+  const modePill = document.getElementById("modePill");
+
+  const rnd = (n) => Math.floor(Math.random()*n);
+  const keys = Object.keys(SHAPES);
+
+  function emptyBoard(){
+    return Array.from({length: ROWS}, () => Array(COLS).fill(""));
+  }
+
+  let board = emptyBoard();
+  let current = null;
+  let nextPiece = null;
+
+  let score = 0;
+  let lines = 0;
+  let level = 1;
+
+  let running = false;
+  let paused = false;
+  let gameOver = false;
+
+  let dropCounter = 0;
+  let lastTime = 0;
+
+  function speedForLevel(lv){
+    // ms per cell drop target (faster with level)
+    const base = 800;
+    const min = 80;
+    return Math.max(min, Math.floor(base * Math.pow(0.85, lv-1)));
+  }
+  let dropInterval = speedForLevel(level);
+
+  function setStatus(s){ statusEl.textContent = s; }
+
+  function updateHUD(){
+    scoreEl.textContent = score;
+    linesEl.textContent = lines;
+    levelEl.textContent = level;
+  }
+
+  function cloneMatrix(m){ return m.map(row => row.slice()); }
+
+  function rotate(matrix){
+    // rotate clockwise
+    const N = matrix.length;
+    const M = matrix[0].length;
+    const res = Array.from({length: M}, () => Array(N).fill(0));
+    for(let r=0;r<N;r++){
+      for(let c=0;c<M;c++){
+        res[c][N-1-r] = matrix[r][c];
+      }
+    }
+    return res;
+  }
+
+  function newPiece(type){
+    const shape = SHAPES[type];
+    const m = cloneMatrix(shape);
+    const w = m[0].length;
+    const x = Math.floor((COLS - w)/2);
+    const y = -1; // start slightly above
+    return { type, m, x, y };
+  }
+
+  function bagGenerator(){
+    // simple 7-bag shuffle
+    const bag = keys.slice();
+    for(let i=bag.length-1;i>0;i--){
+      const j = rnd(i+1);
+      [bag[i], bag[j]] = [bag[j], bag[i]];
+    }
+    return bag;
+  }
+  let bag = bagGenerator();
+
+  function takeFromBag(){
+    if(bag.length === 0) bag = bagGenerator();
+    return bag.pop();
+  }
+
+  function spawn(){
+    if(!nextPiece) nextPiece = newPiece(takeFromBag());
+    current = nextPiece;
+    nextPiece = newPiece(takeFromBag());
+    if(collides(current, board, 0, 0)){
+      gameOver = true;
+      running = false;
+      setStatus("Game Over");
+    } else {
+      setStatus("Playing");
+    }
+    drawNext();
+  }
+
+  function collides(piece, b, dx, dy, testMatrix){
+    const m = testMatrix || piece.m;
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const nx = piece.x + c + dx;
+        const ny = piece.y + r + dy;
+        if(nx < 0 || nx >= COLS) return true;
+        if(ny >= ROWS) return true;
+        if(ny >= 0 && b[ny][nx]) return true;
+      }
+    }
+    return false;
+  }
+
+  function merge(piece){
+    const m = piece.m;
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const x = piece.x + c;
+        const y = piece.y + r;
+        if(y >= 0 && y < ROWS && x >= 0 && x < COLS){
+          board[y][x] = piece.type;
+        }
+      }
+    }
+  }
+
+  function clearLines(){
+    let cleared = 0;
+    for(let r=ROWS-1;r>=0;){
+      if(board[r].every(cell => cell !== "")){
+        board.splice(r,1);
+        board.unshift(Array(COLS).fill(""));
+        cleared++;
+      } else {
+        r--;
+      }
+    }
+    if(cleared > 0){
+      const lineScores = [0, 100, 300, 500, 800]; // 1..4 lines
+      score += (lineScores[cleared] || (cleared*200)) * level;
+      lines += cleared;
+
+      const newLevel = Math.floor(lines / 10) + 1;
+      if(newLevel !== level){
+        level = newLevel;
+        dropInterval = speedForLevel(level);
+      }
+      updateHUD();
+    }
+  }
+
+  function hardDrop(){
+    if(!running || paused || gameOver) return;
+    let d = 0;
+    while(!collides(current, board, 0, 1, current.m)){
+      current.y += 1;
+      d++;
+    }
+    score += d * 2;
+    lockPiece();
+  }
+
+  function softDrop(){
+    if(!running || paused || gameOver) return;
+    if(!collides(current, board, 0, 1, current.m)){
+      current.y += 1;
+      score += 1;
+      updateHUD();
+      draw();
+    } else {
+      lockPiece();
+    }
+  }
+
+  function move(dx){
+    if(!running || paused || gameOver) return;
+    if(!collides(current, board, dx, 0, current.m)){
+      current.x += dx;
+      draw();
+    }
+  }
+
+  function rotatePiece(){
+    if(!running || paused || gameOver) return;
+    const rotated = rotate(current.m);
+    // simple wall kicks
+    const kicks = [0, -1, 1, -2, 2];
+    for(const k of kicks){
+      if(!collides(current, board, k, 0, rotated)){
+        current.m = rotated;
+        current.x += k;
+        draw();
+        return;
+      }
+    }
+  }
+
+  function lockPiece(){
+    merge(current);
+    clearLines();
+    spawn();
+    draw();
+  }
+
+  function tick(time){
+    if(!running || paused || gameOver) return;
+
+    const delta = time - lastTime;
+    lastTime = time;
+    dropCounter += delta;
+
+    if(dropCounter > dropInterval){
+      dropCounter = 0;
+      if(!collides(current, board, 0, 1, current.m)){
+        current.y += 1;
+      } else {
+        lockPiece();
+      }
+      draw();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function start(){
+    if(gameOver){
+      reset();
+    }
+    if(!current) spawn();
+    running = true;
+    paused = false;
+    setStatus("Playing");
+    lastTime = performance.now();
+    requestAnimationFrame(tick);
+  }
+
+  function pause(){
+    if(!running) return;
+    paused = !paused;
+    setStatus(paused ? "Paused" : "Playing");
+    if(!paused){
+      lastTime = performance.now();
+      requestAnimationFrame(tick);
+    }
+  }
+
+  function reset(){
+    board = emptyBoard();
+    current = null;
+    nextPiece = null;
+    bag = bagGenerator();
+    score = 0;
+    lines = 0;
+    level = 1;
+    dropInterval = speedForLevel(level);
+    running = false;
+    paused = false;
+    gameOver = false;
+    setStatus("Ready");
+    updateHUD();
+    draw();
+    drawNext();
+  }
+
+  // ====== Rendering ======
+  function drawCell(context, x, y, color){
+    const px = BORDER + x*BLOCK;
+    const py = BORDER + y*BLOCK;
+    context.fillStyle = color;
+    context.fillRect(px, py, BLOCK, BLOCK);
+
+    // glossy bevel
+    context.fillStyle = "rgba(255,255,255,0.10)";
+    context.fillRect(px+2, py+2, BLOCK-4, Math.floor(BLOCK*0.35));
+    context.fillStyle = "rgba(0,0,0,0.22)";
+    context.fillRect(px+2, py+Math.floor(BLOCK*0.65), BLOCK-4, Math.floor(BLOCK*0.33));
+
+    // grid line
+    context.strokeStyle = "rgba(0,0,0,0.25)";
+    context.strokeRect(px+0.5, py+0.5, BLOCK-1, BLOCK-1);
+  }
+
+  function drawGrid(){
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0,0, game.width, game.height);
+
+    // Because we use CSS pixel transform via setTransform, game.width/height are device px
+    // but ctx coords are CSS px. So clear via canvas client size:
+    const w = game.getBoundingClientRect().width;
+    const h = game.getBoundingClientRect().height;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0,0,w,h);
+
+    // outline
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1,1,w-2,h-2);
+
+    // grid lines in play area
+    const playW = COLS*BLOCK;
+    const playH = ROWS*BLOCK;
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth = 1;
+    for(let c=0;c<=COLS;c++){
+      const x = BORDER + c*BLOCK + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, BORDER);
+      ctx.lineTo(x, BORDER + playH);
+      ctx.stroke();
+    }
+    for(let r=0;r<=ROWS;r++){
+      const y = BORDER + r*BLOCK + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(BORDER, y);
+      ctx.lineTo(BORDER + playW, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawGhost(){
+    if(!current) return;
+    // compute drop distance
+    let dy = 0;
+    while(!collides(current, board, 0, dy+1, current.m)) dy++;
+    const m = current.m;
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const x = current.x + c;
+        const y = current.y + r + dy;
+        if(y < 0) continue;
+        drawCell(ctx, x, y, COLORS.G);
+      }
+    }
+  }
+
+  function drawBoard(){
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        const t = board[r][c];
+        if(!t) continue;
+        drawCell(ctx, c, r, COLORS[t] || "#fff");
+      }
+    }
+  }
+
+  function drawCurrent(){
+    if(!current) return;
+    const m = current.m;
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const x = current.x + c;
+        const y = current.y + r;
+        if(y < 0) continue;
+        drawCell(ctx, x, y, COLORS[current.type] || "#fff");
+      }
+    }
+  }
+
+  function drawOverlay(text){
+    const w = game.getBoundingClientRect().width;
+    const h = game.getBoundingClientRect().height;
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(0,0,w,h);
+    ctx.fillStyle = "#e9eef5";
+    ctx.font = "700 28px -apple-system, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(text, w/2, h/2);
+    ctx.font = "500 14px -apple-system, system-ui, sans-serif";
+    ctx.fillStyle = "rgba(233,238,245,0.85)";
+    ctx.fillText("Tap Start to play", w/2, h/2 + 28);
+  }
+
+  function draw(){
+    drawGrid();
+    drawBoard();
+    if(current){
+      drawGhost();
+      drawCurrent();
+    }
+    if(!running && !gameOver){
+      drawOverlay("Ready");
+    }
+    if(paused){
+      drawOverlay("Paused");
+    }
+    if(gameOver){
+      drawOverlay("Game Over");
+    }
+  }
+
+  function drawNext(){
+    const w = nextC.getBoundingClientRect().width;
+    const h = nextC.getBoundingClientRect().height;
+    nctx.clearRect(0,0,w,h);
+    nctx.fillStyle = bgColor;
+    nctx.fillRect(0,0,w,h);
+
+    if(!nextPiece) return;
+
+    // draw next piece centered
+    const m = nextPiece.m;
+    const size = Math.max(m.length, m[0].length);
+    const cell = Math.floor(Math.min(w,h) / (size + 2));
+    const ox = Math.floor((w - m[0].length*cell)/2);
+    const oy = Math.floor((h - m.length*cell)/2);
+
+    for(let r=0;r<m.length;r++){
+      for(let c=0;c<m[r].length;c++){
+        if(!m[r][c]) continue;
+        const x = ox + c*cell;
+        const y = oy + r*cell;
+        nctx.fillStyle = COLORS[nextPiece.type];
+        nctx.fillRect(x, y, cell, cell);
+        nctx.fillStyle = "rgba(255,255,255,0.12)";
+        nctx.fillRect(x+2, y+2, cell-4, Math.floor(cell*0.35));
+        nctx.strokeStyle = "rgba(0,0,0,0.25)";
+        nctx.strokeRect(x+0.5,y+0.5,cell-1,cell-1);
+      }
+    }
+  }
+
+  // ====== Inputs ======
+  function bindHoldButton(el, onPress, onRelease){
+    let holdTimer = null;
+    const startHold = (e) => {
+      e.preventDefault();
+      onPress();
+      holdTimer = setInterval(onPress, 70);
+    };
+    const endHold = (e) => {
+      e.preventDefault();
+      if(holdTimer){ clearInterval(holdTimer); holdTimer = null; }
+      if(onRelease) onRelease();
+    };
+    el.addEventListener("touchstart", startHold, {passive:false});
+    el.addEventListener("touchend", endHold, {passive:false});
+    el.addEventListener("touchcancel", endHold, {passive:false});
+    el.addEventListener("mousedown", startHold);
+    el.addEventListener("mouseup", endHold);
+    el.addEventListener("mouseleave", endHold);
+  }
+
+  document.getElementById("btnStart").addEventListener("click", start);
+  document.getElementById("btnPause").addEventListener("click", pause);
+  document.getElementById("btnReset").addEventListener("click", reset);
+
+  bindHoldButton(document.getElementById("left"), () => move(-1));
+  bindHoldButton(document.getElementById("right"), () => move(1));
+  bindHoldButton(document.getElementById("down"), () => softDrop());
+  document.getElementById("rotate").addEventListener("click", rotatePiece);
+  document.getElementById("hard").addEventListener("click", hardDrop);
+
+  // Swipe controls on canvas (iPhone friendly)
+  let sx=0, sy=0, moved=false;
+  game.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    sx = t.clientX; sy = t.clientY; moved=false;
+    modePill.textContent = "Touch+Swipe";
+  }, {passive:false});
+
+  game.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const dx = t.clientX - sx;
+    const dy = t.clientY - sy;
+    const TH = 18;
+    if(Math.abs(dx) > TH && Math.abs(dx) > Math.abs(dy)){
+      move(dx > 0 ? 1 : -1);
+      sx = t.clientX; sy = t.clientY; moved=true;
+    } else if(Math.abs(dy) > TH && Math.abs(dy) > Math.abs(dx)){
+      if(dy > 0) softDrop();
+      sy = t.clientY; sx = t.clientX; moved=true;
+    }
+  }, {passive:false});
+
+  game.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    // Tap to rotate if it wasn't a swipe
+    if(!moved) rotatePiece();
+  }, {passive:false});
+
+  // Keyboard (PC testing)
+  window.addEventListener("keydown", (e) => {
+    if(e.key === "p" || e.key === "P") { pause(); return; }
+    if(e.key === "Enter") { start(); return; }
+
+    if(!running || paused || gameOver){
+      // allow start with space
+      if(e.key === " "){ start(); }
+      return;
+    }
+    switch(e.key){
+      case "ArrowLeft": move(-1); break;
+      case "ArrowRight": move(1); break;
+      case "ArrowDown": softDrop(); break;
+      case "ArrowUp": rotatePiece(); break;
+      case " ": hardDrop(); break;
+    }
+  });
+
+  // ====== Init ======
+  reset();
+  draw();
+})();
+</script>
+</body>
+</html>
